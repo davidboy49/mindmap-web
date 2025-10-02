@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mind Map Studio - Cloud Synced</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lucide/0.263.1/umd/lucide.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const { Plus, Trash2, Save, FolderOpen, Download, Upload, Edit2, Check, X, ZoomIn, ZoomOut, LogOut, Cloud, CloudOff } = lucide;
+
+        // Firebase Configuration - REPLACE WITH YOUR OWN CONFIG
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY_HERE",
+            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+            databaseURL: "https://YOUR_PROJECT_ID-default-rtdb.firebaseio.com",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_PROJECT_ID.appspot.com",
+            messagingSenderId: "YOUR_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        // Check if Firebase config is set
+        const isFirebaseConfigured = firebaseConfig.apiKey !== "YOUR_API_KEY_HERE";
+
+        // Initialize Firebase only if configured
+        let app, database, auth;
+        if (isFirebaseConfigured) {
+            try {
+                app = firebase.initializeApp(firebaseConfig);
+                database = firebase.database();
+                auth = firebase.auth();
+            } catch (error) {
+                console.error("Firebase initialization error:", error);
+            }
+        }
+
+        const MindMapApp = () => {
+            const [maps, setMaps] = useState([]);
+            const [currentMap, setCurrentMap] = useState(null);
+            const [nodes, setNodes] = useState([]);
+            const [connections, setConnections] = useState([]);
+            const [selectedNode, setSelectedNode] = useState(null);
+            const [draggingNode, setDraggingNode] = useState(null);
+            const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+            const [editingNode, setEditingNode] = useState(null);
+            const [editText, setEditText] = useState('');
+            const [showMapList, setShowMapList] = useState(false);
+            const [mapName, setMapName] = useState('Untitled Map');
+            const [isEditingName, setIsEditingName] = useState(false);
+            const [zoom, setZoom] = useState(1);
+            const [pan, setPan] = useState({ x: 0, y: 0 });
+            const [isPanning, setIsPanning] = useState(false);
+            const [panStart, setPanStart] = useState({ x: 0, y: 0 });
+            const [user, setUser] = useState(null);
+            const [isOnline, setIsOnline] = useState(isFirebaseConfigured);
+            const [syncStatus, setSyncStatus] = useState('idle');
+            const canvasRef = useRef(null);
+
+            useEffect(() => {
+                if (!isFirebaseConfigured) {
+                    // Fallback to localStorage
+                    loadFromLocalStorage();
+                    return;
+                }
+
+                // Anonymous authentication
+                auth.signInAnonymously()
+                    .then((userCredential) => {
+                        setUser(userCredential.user);
+                        setIsOnline(true);
+                        loadMapsFromFirebase(userCredential.user.uid);
+                    })
+                    .catch((error) => {
+                        console.error("Auth error:", error);
+                        setIsOnline(false);
+                        loadFromLocalStorage();
+                    });
+            }, []);
+
+            const loadFromLocalStorage = () => {
+                const savedMaps = JSON.parse(localStorage.getItem('mindMaps') || '[]');
+                setMaps(savedMaps);
+                if (savedMaps.length > 0) {
+                    loadMap(savedMaps[0]);
+                } else {
+                    initializeNewMap();
+                }
+            };
+
+            const loadMapsFromFirebase = (userId) => {
+                const mapsRef = database.ref(`users/${userId}/maps`);
+                mapsRef.on('value', (snapshot) => {
+                    const data = snapshot.val();
+                    if (data) {
+                        const mapsArray = Object.keys(data).map(key => ({
+                            ...data[key],
+                            id: key
+                        }));
+                        setMaps(mapsArray);
+                        if (mapsArray.length > 0 && !currentMap) {
+                            loadMap(mapsArray[0]);
+                        }
+                    } else {
+                        initializeNewMap();
+                    }
+                });
+            };
+
+            const initializeNewMap = () => {
+                const centerNode = {
+                    id: Date.now(),
+                    text: 'Central Idea',
+                    x: 400,
+                    y: 300,
+                    color: '#3b82f6',
+                    isCenter: true
+                };
+                setNodes([centerNode]);
+                setConnections([]);
+                setMapName('Untitled Map');
+                setCurrentMap(null);
+            };
+
+            const saveMap = async () => {
+                const mapData = {
+                    id: currentMap?.id || `map_${Date.now()}`,
+                    name: mapName,
+                    nodes,
+                    connections,
+                    lastModified: new Date().toISOString()
+                };
+
+                setSyncStatus('saving');
+
+                if (isOnline && user) {
+                    try {
+                        await database.ref(`users/${user.uid}/maps/${mapData.id}`).set(mapData);
+                        setCurrentMap(mapData);
+                        setSyncStatus('synced');
+                        setTimeout(() => setSyncStatus('idle'), 2000);
+                    } catch (error) {
+                        console.error("Save error:", error);
+                        setSyncStatus('error');
+                        saveToLocalStorage(mapData);
+                    }
+                } else {
+                    saveToLocalStorage(mapData);
+                }
+            };
+
+            const saveToLocalStorage = (mapData) => {
+                let updatedMaps;
+                if (currentMap) {
+                    updatedMaps = maps.map(m => m.id === currentMap.id ? mapData : m);
+                } else {
+                    updatedMaps = [...maps, mapData];
+                }
+                setMaps(updatedMaps);
+                setCurrentMap(mapData);
+                localStorage.setItem('mindMaps', JSON.stringify(updatedMaps));
+                setSyncStatus('local');
+                setTimeout(() => setSyncStatus('idle'), 2000);
+            };
+
+            const loadMap = (map) => {
+                setCurrentMap(map);
+                setNodes(map.nodes);
+                setConnections(map.connections);
+                setMapName(map.name);
+                setShowMapList(false);
+            };
+
+            const deleteMap = async (mapId) => {
+                if (!confirm('Are you sure you want to delete this map?')) return;
+
+                if (isOnline && user) {
+                    try {
+                        await database.ref(`users/${user.uid}/maps/${mapId}`).remove();
+                    } catch (error) {
+                        console.error("Delete error:", error);
+                    }
+                } else {
+                    const updatedMaps = maps.filter(m => m.id !== mapId);
+                    setMaps(updatedMaps);
+                    localStorage.setItem('mindMaps', JSON.stringify(updatedMaps));
+                }
+
+                if (currentMap?.id === mapId) {
+                    const remainingMaps = maps.filter(m => m.id !== mapId);
+                    if (remainingMaps.length > 0) {
+                        loadMap(remainingMaps[0]);
+                    } else {
+                        initializeNewMap();
+                    }
+                }
+            };
+
+            const addNode = () => {
+                if (!selectedNode) {
+                    alert('Please select a parent node first');
+                    return;
+                }
+
+                const angle = Math.random() * Math.PI * 2;
+                const distance = 150;
+                const newNode = {
+                    id: Date.now(),
+                    text: 'New Node',
+                    x: selectedNode.x + Math.cos(angle) * distance,
+                    y: selectedNode.y + Math.sin(angle) * distance,
+                    color: `hsl(${Math.random() * 360}, 70%, 60%)`,
+                    isCenter: false
+                };
+
+                setNodes([...nodes, newNode]);
+                setConnections([...connections, { from: selectedNode.id, to: newNode.id }]);
+            };
+
+            const deleteNode = (nodeId) => {
+                const node = nodes.find(n => n.id === nodeId);
+                if (node?.isCenter) {
+                    alert('Cannot delete the central node');
+                    return;
+                }
+                setNodes(nodes.filter(n => n.id !== nodeId));
+                setConnections(connections.filter(c => c.from !== nodeId && c.to !== nodeId));
+                setSelectedNode(null);
+            };
+
+            const startDragging = (e, node) => {
+                if (editingNode) return;
+                setDraggingNode(node);
+                const rect = canvasRef.current.getBoundingClientRect();
+                setDragOffset({
+                    x: (e.clientX - rect.left) / zoom - pan.x - node.x,
+                    y: (e.clientY - rect.top) / zoom - pan.y - node.y
+                });
+            };
+
+            const handleMouseMove = (e) => {
+                if (draggingNode) {
+                    const rect = canvasRef.current.getBoundingClientRect();
+                    const newX = (e.clientX - rect.left) / zoom - pan.x - dragOffset.x;
+                    const newY = (e.clientY - rect.top) / zoom - pan.y - dragOffset.y;
+                    
+                    setNodes(nodes.map(n => 
+                        n.id === draggingNode.id ? { ...n, x: newX, y: newY } : n
+                    ));
+                } else if (isPanning) {
+                    setPan({
+                        x: pan.x + (e.clientX - panStart.x) / zoom,
+                        y: pan.y + (e.clientY - panStart.y) / zoom
+                    });
+                    setPanStart({ x: e.clientX, y: e.clientY });
+                }
+            };
+
+            const handleMouseUp = () => {
+                setDraggingNode(null);
+                setIsPanning(false);
+            };
+
+            const startEditing = (node) => {
+                setEditingNode(node.id);
+                setEditText(node.text);
+            };
+
+            const saveEdit = () => {
+                setNodes(nodes.map(n => 
+                    n.id === editingNode ? { ...n, text: editText } : n
+                ));
+                setEditingNode(null);
+            };
+
+            const exportMap = () => {
+                const dataStr = JSON.stringify({ name: mapName, nodes, connections }, null, 2);
+                const dataBlob = new Blob([dataStr], { type: 'application/json' });
+                const url = URL.createObjectURL(dataBlob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `${mapName}.json`;
+                link.click();
+            };
+
+            const importMap = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        try {
+                            const data = JSON.parse(event.target.result);
+                            setNodes(data.nodes);
+                            setConnections(data.connections);
+                            setMapName(data.name);
+                            setCurrentMap(null);
+                        } catch (error) {
+                            alert('Error importing map');
+                        }
+                    };
+                    reader.readAsText(file);
+                }
+            };
+
+            const startPanning = (e) => {
+                if (e.target === canvasRef.current) {
+                    setIsPanning(true);
+                    setPanStart({ x: e.clientX, y: e.clientY });
+                }
+            };
+
+            const getSyncStatusIcon = () => {
+                if (!isFirebaseConfigured) {
+                    return <CloudOff size={16} className="text-gray-400" />;
+                }
+                switch (syncStatus) {
+                    case 'saving':
+                        return <Cloud size={16} className="text-blue-400 animate-pulse" />;
+                    case 'synced':
+                        return <Cloud size={16} className="text-green-400" />;
+                    case 'error':
+                        return <CloudOff size={16} className="text-red-400" />;
+                    case 'local':
+                        return <CloudOff size={16} className="text-yellow-400" />;
+                    default:
+                        return isOnline ? <Cloud size={16} className="text-gray-400" /> : <CloudOff size={16} className="text-gray-400" />;
+                }
+            };
+
+            const getSyncStatusText = () => {
+                if (!isFirebaseConfigured) {
+                    return 'Local Only (Configure Firebase for cloud sync)';
+                }
+                switch (syncStatus) {
+                    case 'saving':
+                        return 'Syncing...';
+                    case 'synced':
+                        return 'Synced to cloud';
+                    case 'error':
+                        return 'Sync error - saved locally';
+                    case 'local':
+                        return 'Saved locally only';
+                    default:
+                        return isOnline ? 'Cloud connected' : 'Offline mode';
+                }
+            };
+
+            return (
+                <div className="w-full h-screen bg-gray-900 flex flex-col overflow-hidden">
+                    {/* Header */}
+                    <div className="bg-gray-800 border-b border-gray-700 p-4 flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                            <h1 className="text-2xl font-bold text-white">Mind Map Studio</h1>
+                            {isEditingName ? (
+                                <div className="flex items-center gap-2">
+                                    <input
+                                        type="text"
+                                        value={mapName}
+                                        onChange={(e) => setMapName(e.target.value)}
+                                        className="px-3 py-1 bg-gray-700 text-white rounded border border-gray-600"
+                                        autoFocus
+                                    />
+                                    <button onClick={() => setIsEditingName(false)} className="text-green-400 hover:text-green-300">
+                                        <Check size={20} />
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="flex items-center gap-2">
+                                    <span className="text-gray-300">{mapName}</span>
+                                    <button onClick={() => setIsEditingName(true)} className="text-gray-400 hover:text-gray-300">
+                                        <Edit2 size={16} />
+                                    </button>
+                                </div>
+                            )}
+                            <div className="flex items-center gap-2 text-xs">
+                                {getSyncStatusIcon()}
+                                <span className="text-gray-400">{getSyncStatusText()}</span>
+                            </div>
+                        </div>
+                        
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={() => setZoom(Math.min(zoom + 0.1, 2))}
+                                className="p-2 bg-gray-700 text-white rounded hover:bg-gray-600"
+                                title="Zoom In"
+                            >
+                                <ZoomIn size={20} />
+                            </button>
+                            <button
+                                onClick={() => setZoom(Math.max(zoom - 0.1, 0.5))}
+                                className="p-2 bg-gray-700 text-white rounded hover:bg-gray-600"
+                                title="Zoom Out"
+                            >
+                                <ZoomOut size={20} />
+                            </button>
+                            <span className="text-white px-2">{Math.round(zoom * 100)}%</span>
+                            <button
+                                onClick={addNode}
+                                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                disabled={!selectedNode}
+                            >
+                                <Plus size={20} />
+                                Add Node
+                            </button>
+                            <button
+                                onClick={saveMap}
+                                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                            >
+                                <Save size={20} />
+                                Save
+                            </button>
+                            <button
+                                onClick={() => setShowMapList(!showMapList)}
+                                className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700"
+                            >
+                                <FolderOpen size={20} />
+                                Maps ({maps.length})
+                            </button>
+                            <button
+                                onClick={exportMap}
+                                className="p-2 bg-gray-700 text-white rounded hover:bg-gray-600"
+                                title="Export"
+                            >
+                                <Download size={20} />
+                            </button>
+                            <label className="p-2 bg-gray-700 text-white rounded hover:bg-gray-600 cursor-pointer" title="Import">
+                                <Upload size={20} />
+                                <input type="file" accept=".json" onChange={importMap} className="hidden" />
+                            </label>
+                            <button
+                                onClick={initializeNewMap}
+                                className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600"
+                            >
+                                New Map
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Firebase Setup Notice */}
+                    {!isFirebaseConfigured && (
+                        <div className="bg-yellow-900 border-b border-yellow-700 p-3 text-yellow-100 text-sm">
+                            <strong>⚠️ Cloud Sync Not Configured:</strong> Follow the setup instructions below to enable cloud syncing across all your devices. Currently using local storage only.
+                        </div>
+                    )}
+
+                    {/* Map List Sidebar */}
+                    {showMapList && (
+                        <div className="absolute top-20 right-4 w-80 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-10 max-h-96 overflow-y-auto">
+                            <div className="p-4">
+                                <h3 className="text-lg font-bold text-white mb-4">Saved Maps</h3>
+                                {maps.length === 0 ? (
+                                    <p className="text-gray-400">No saved maps yet</p>
+                                ) : (
+                                    <div className="space-y-2">
+                                        {maps.map(map => (
+                                            <div
+                                                key={map.id}
+                                                className={`p-3 rounded border ${currentMap?.id === map.id ? 'border-blue-500 bg-gray-700' : 'border-gray-600 bg-gray-750'} cursor-pointer hover:bg-gray-700`}
+                                            >
+                                                <div className="flex items-center justify-between">
+                                                    <div onClick={() => loadMap(map)} className="flex-1">
+                                                        <p className="text-white font-medium">{map.name}</p>
+                                                        <p className="text-gray-400 text-sm">
+                                                            {new Date(map.lastModified).toLocaleDateString()}
+                                                        </p>
+                                                        <p className="text-gray-500 text-xs">{map.nodes.length} nodes</p>
+                                                    </div>
+                                                    <button
+                                                        onClick={() => deleteMap(map.id)}
+                                                        className="p-2 text-red-400 hover:text-red-300 hover:bg-gray-600 rounded"
+                                                    >
+                                                        <Trash2 size={16} />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Canvas */}
+                    <div 
+                        ref={canvasRef}
+                        className="flex-1 relative overflow-hidden cursor-move"
+                        onMouseMove={handleMouseMove}
+                        onMouseUp={handleMouseUp}
+                        onMouseDown={startPanning}
+                        onMouseLeave={handleMouseUp}
+                    >
+                        <svg className="absolute inset-0 w-full h-full pointer-events-none">
+                            <g transform={`translate(${pan.x * zoom}, ${pan.y * zoom}) scale(${zoom})`}>
+                                {connections.map((conn, idx) => {
+                                    const fromNode = nodes.find(n => n.id === conn.from);
+                                    const toNode = nodes.find(n => n.id === conn.to);
+                                    if (!fromNode || !toNode) return null;
+                                    
+                                    return (
+                                        <line
+                                            key={idx}
+                                            x1={fromNode.x + 75}
+                                            y1={fromNode.y + 30}
+                                            x2={toNode.x + 75}
+                                            y2={toNode.y + 30}
+                                            stroke="#4b5563"
+                                            strokeWidth="2"
+                                        />
+                                    );
+                                })}
+                            </g>
+                        </svg>
+
+                        <div 
+                            className="absolute inset-0"
+                            style={{ 
+                                transform: `translate(${pan.x * zoom}px, ${pan.y * zoom}px) scale(${zoom})`,
+                                transformOrigin: '0 0'
+                            }}
+                        >
+                            {nodes.map(node => (
+                                <div
+                                    key={node.id}
+                                    className={`absolute cursor-move transition-shadow ${
+                                        selectedNode?.id === node.id ? 'ring-4 ring-yellow-400' : ''
+                                    } ${node.isCenter ? 'ring-2 ring-white' : ''}`}
+                                    style={{
+                                        left: node.x,
+                                        top: node.y,
+                                        backgroundColor: node.color,
+                                        pointerEvents: 'auto'
+                                    }}
+                                    onMouseDown={(e) => {
+                                        e.stopPropagation();
+                                        startDragging(e, node);
+                                        setSelectedNode(node);
+                                    }}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedNode(node);
+                                    }}
+                                >
+                                    <div className="px-4 py-2 rounded-lg shadow-lg min-w-[150px] max-w-[250px]">
+                                        {editingNode === node.id ? (
+                                            <div className="flex items-center gap-2">
+                                                <input
+                                                    type="text"
+                                                    value={editText}
+                                                    onChange={(e) => setEditText(e.target.value)}
+                                                    className="flex-1 px-2 py-1 bg-white/20 text-white rounded border-none outline-none"
+                                                    autoFocus
+                                                    onKeyPress={(e) => e.key === 'Enter' && saveEdit()}
+                                                />
+                                                <button onClick={saveEdit} className="text-white hover:text-green-200">
+                                                    <Check size={16} />
+                                                </button>
+                                                <button onClick={() => setEditingNode(null)} className="text-white hover:text-red-200">
+                                                    <X size={16} />
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <div className="flex items-center justify-between gap-2">
+                                                <p className="text-white font-medium text-sm flex-1">{node.text}</p>
+                                                <div className="flex gap-1">
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            startEditing(node);
+                                                        }}
+                                                        className="text-white hover:text-blue-200 p-1"
+                                                    >
+                                                        <Edit2 size={14} />
+                                                    </button>
+                                                    {!node.isCenter && (
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                deleteNode(node.id);
+                                                            }}
+                                                            className="text-white hover:text-red-200 p-1"
+                                                        >
+                                                            <Trash2 size={14} />
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Instructions */}
+                    <div className="bg-gray-800 border-t border-gray-700 p-3 text-sm text-gray-400">
+                        <p>
+                            <strong className="text-white">Instructions:</strong> Click a node to select it (yellow ring) → Click "Add Node" to create a child → 
+                            Drag nodes to reposition → Click edit icon to rename → Drag canvas to pan → Use zoom controls
+                            {isOnline && <span className="text-green-400 ml-4">✓ Cloud syncing enabled - access from any device!</span>}
+                        </p>
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<MindMapApp />, document.getElementById('root'));
+    </script>
+</body>
+</html>
