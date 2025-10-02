@@ -487,8 +487,22 @@
                                             await auth.signInWithPopup(provider);
                                         } catch (error) {
                                             console.error('Sign-in error:', error);
-                                            setSyncStatus('error');
-                                            alert('Google sign-in failed. Please try again.');
+                                            setSyncStatus('signedOut');
+
+                                            let message = 'Google sign-in failed. Please try again.';
+                                            if (error.code === 'auth/popup-blocked') {
+                                                message = 'Enable pop-ups for this site to sign in with Google.';
+                                            } else if (error.code === 'auth/popup-closed-by-user') {
+                                                message = 'The sign-in popup was closed before completing. Please try again.';
+                                            } else if (error.code === 'auth/unauthorized-domain') {
+                                                message = 'Add your app\'s domain to the authorized domains list in the Firebase console.';
+                                            } else if (error.code === 'auth/admin-restricted-operation') {
+                                                message = 'Enable the Google sign-in provider for this Firebase project to continue.';
+                                            } else if (error.code === 'auth/operation-not-supported-in-this-environment') {
+                                                message = 'Google popup sign-in is not supported in this environment. Host the app over HTTP(S) and try again.';
+                                            }
+
+                                            alert(message);
                                             loadFromLocalStorage();
                                         }
                                     }}
