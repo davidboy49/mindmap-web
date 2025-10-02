@@ -12,7 +12,7 @@
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { margin: 0; padding: 0; overflow: hidden; }
+        body { margin: 0; padding: 0; }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
         .animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
     </style>
@@ -313,6 +313,18 @@
                 });
             };
 
+            const startTouchDragging = (e, node) => {
+                if (editingNode) return;
+                const touch = e.touches?.[0];
+                if (!touch) return;
+                setDraggingNode(node);
+                const rect = canvasRef.current.getBoundingClientRect();
+                setDragOffset({
+                    x: (touch.clientX - rect.left) / zoom - pan.x - node.x,
+                    y: (touch.clientY - rect.top) / zoom - pan.y - node.y
+                });
+            };
+
             const handleMouseMove = (e) => {
                 if (draggingNode) {
                     const rect = canvasRef.current.getBoundingClientRect();
@@ -331,6 +343,41 @@
             };
 
             const handleMouseUp = () => {
+                setDraggingNode(null);
+                setIsPanning(false);
+            };
+
+            const handleTouchStart = (e) => {
+                if (e.target === canvasRef.current) {
+                    const touch = e.touches?.[0];
+                    if (!touch) return;
+                    setIsPanning(true);
+                    setPanStart({ x: touch.clientX, y: touch.clientY });
+                }
+            };
+
+            const handleTouchMove = (e) => {
+                const touch = e.touches?.[0];
+                if (!touch) return;
+                e.preventDefault();
+
+                if (draggingNode) {
+                    const rect = canvasRef.current.getBoundingClientRect();
+                    const newX = (touch.clientX - rect.left) / zoom - pan.x - dragOffset.x;
+                    const newY = (touch.clientY - rect.top) / zoom - pan.y - dragOffset.y;
+                    setNodes(nodes.map(n =>
+                        n.id === draggingNode.id ? { ...n, x: newX, y: newY } : n
+                    ));
+                } else if (isPanning) {
+                    setPan({
+                        x: pan.x + (touch.clientX - panStart.x) / zoom,
+                        y: pan.y + (touch.clientY - panStart.y) / zoom
+                    });
+                    setPanStart({ x: touch.clientX, y: touch.clientY });
+                }
+            };
+
+            const handleTouchEnd = () => {
                 setDraggingNode(null);
                 setIsPanning(false);
             };
@@ -404,17 +451,17 @@
             };
 
             return (
-                <div className="w-full h-screen bg-gray-900 flex flex-col overflow-hidden">
-                    <div className="bg-gray-800 border-b border-gray-700 p-4 flex items-center justify-between flex-wrap gap-2">
-                        <div className="flex items-center gap-4">
-                            <h1 className="text-2xl font-bold text-white">Mind Map Studio</h1>
+                <div className="min-h-screen w-full bg-gray-900 flex flex-col overflow-hidden">
+                    <div className="bg-gray-800 border-b border-gray-700 px-4 py-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+                            <h1 className="text-2xl font-bold text-white leading-tight">Mind Map Studio</h1>
                             {isEditingName ? (
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 flex-wrap">
                                     <input
                                         type="text"
                                         value={mapName}
                                         onChange={(e) => setMapName(e.target.value)}
-                                        className="px-3 py-1 bg-gray-700 text-white rounded border border-gray-600"
+                                        className="px-3 py-2 bg-gray-700 text-white rounded border border-gray-600 text-sm w-full sm:w-auto"
                                         autoFocus
                                     />
                                     <button onClick={() => setIsEditingName(false)} className="text-green-400 hover:text-green-300">
@@ -422,8 +469,8 @@
                                     </button>
                                 </div>
                             ) : (
-                                <div className="flex items-center gap-2">
-                                    <span className="text-gray-300">{mapName}</span>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-gray-300 text-sm sm:text-base break-words max-w-[200px] sm:max-w-none">{mapName}</span>
                                     <button onClick={() => setIsEditingName(true)} className="text-gray-400 hover:text-gray-300">
                                         <Icon name="edit" size={16} />
                                     </button>
@@ -432,34 +479,34 @@
                             {getSyncIndicator()}
                         </div>
                         
-                        <div className="flex items-center gap-2 flex-wrap">
-                            <button onClick={() => setZoom(Math.min(zoom + 0.1, 2))} className="p-2 bg-gray-700 text-white rounded hover:bg-gray-600" title="Zoom In">
+                        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap overflow-x-auto sm:overflow-visible pb-1 sm:pb-0">
+                            <button onClick={() => setZoom(Math.min(zoom + 0.1, 2))} className="p-2 bg-gray-700 text-white rounded hover:bg-gray-600 text-sm whitespace-nowrap" title="Zoom In">
                                 <Icon name="zoomIn" />
                             </button>
-                            <button onClick={() => setZoom(Math.max(zoom - 0.1, 0.5))} className="p-2 bg-gray-700 text-white rounded hover:bg-gray-600" title="Zoom Out">
+                            <button onClick={() => setZoom(Math.max(zoom - 0.1, 0.5))} className="p-2 bg-gray-700 text-white rounded hover:bg-gray-600 text-sm whitespace-nowrap" title="Zoom Out">
                                 <Icon name="zoomOut" />
                             </button>
-                            <span className="text-white px-2">{Math.round(zoom * 100)}%</span>
-                            <button onClick={addNode} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50" disabled={!selectedNode}>
+                            <span className="text-white px-2 text-sm">{Math.round(zoom * 100)}%</span>
+                            <button onClick={addNode} className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 text-sm whitespace-nowrap" disabled={!selectedNode}>
                                 <Icon name="plus" />
                                 Add Node
                             </button>
-                            <button onClick={saveMap} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">
+                            <button onClick={saveMap} className="flex items-center gap-2 px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm whitespace-nowrap">
                                 <Icon name="save" />
                                 Save
                             </button>
-                            <button onClick={() => setShowMapList(!showMapList)} className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700">
+                            <button onClick={() => setShowMapList(!showMapList)} className="flex items-center gap-2 px-3 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 text-sm whitespace-nowrap">
                                 <Icon name="folder" />
                                 Maps ({maps.length})
                             </button>
-                            <button onClick={exportMap} className="p-2 bg-gray-700 text-white rounded hover:bg-gray-600" title="Export">
+                            <button onClick={exportMap} className="p-2 bg-gray-700 text-white rounded hover:bg-gray-600 text-sm" title="Export">
                                 <Icon name="download" />
                             </button>
-                            <label className="p-2 bg-gray-700 text-white rounded hover:bg-gray-600 cursor-pointer" title="Import">
+                            <label className="p-2 bg-gray-700 text-white rounded hover:bg-gray-600 cursor-pointer text-sm whitespace-nowrap" title="Import">
                                 <Icon name="upload" />
                                 <input type="file" accept=".json" onChange={importMap} className="hidden" />
                             </label>
-                            <button onClick={initializeNewMap} className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600">
+                            <button onClick={initializeNewMap} className="px-3 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 text-sm whitespace-nowrap">
                                 New Map
                             </button>
                             {user ? (
@@ -475,7 +522,7 @@
                                             alert('Error signing out. Please try again.');
                                         }
                                     }}
-                                    className="px-4 py-2 bg-orange-500 text-gray-900 rounded hover:bg-orange-400"
+                                    className="px-3 py-2 bg-orange-500 text-gray-900 rounded hover:bg-orange-400 text-sm whitespace-nowrap"
                                 >
                                     Sign Out {user.displayName ? `(${user.displayName})` : ''}
                                 </button>
@@ -506,7 +553,7 @@
                                             loadFromLocalStorage();
                                         }
                                     }}
-                                    className="px-4 py-2 bg-yellow-400 text-gray-900 rounded hover:bg-yellow-300"
+                                    className="px-3 py-2 bg-yellow-400 text-gray-900 rounded hover:bg-yellow-300 text-sm whitespace-nowrap"
                                 >
                                     Sign in with Google
                                 </button>
@@ -530,7 +577,7 @@
                                             }
                                         }
                                     }}
-                                    className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 text-sm"
+                                    className="px-3 py-2 bg-red-600 text-white rounded hover:bg-red-700 text-sm whitespace-nowrap"
                                     title="Clear all cloud data"
                                 >
                                     Reset Cloud
@@ -540,7 +587,7 @@
                     </div>
 
                     {showMapList && (
-                        <div className="absolute top-20 right-4 w-80 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-10 max-h-96 overflow-y-auto">
+                        <div className="absolute inset-x-4 top-24 sm:top-20 sm:right-4 sm:left-auto sm:w-80 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-10 max-h-[70vh] overflow-y-auto">
                             <div className="p-4">
                                 <h3 className="text-lg font-bold text-white mb-4">Saved Maps</h3>
                                 {maps.length === 0 ? (
@@ -567,7 +614,17 @@
                         </div>
                     )}
 
-                    <div ref={canvasRef} className="flex-1 relative overflow-hidden cursor-move" onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseDown={startPanning} onMouseLeave={handleMouseUp}>
+                    <div
+                        ref={canvasRef}
+                        className="flex-1 relative overflow-hidden cursor-move touch-none"
+                        onMouseMove={handleMouseMove}
+                        onMouseUp={handleMouseUp}
+                        onMouseDown={startPanning}
+                        onMouseLeave={handleMouseUp}
+                        onTouchStart={handleTouchStart}
+                        onTouchMove={handleTouchMove}
+                        onTouchEnd={handleTouchEnd}
+                    >
                         <svg className="absolute inset-0 w-full h-full pointer-events-none">
                             <g transform={`translate(${pan.x * zoom}, ${pan.y * zoom}) scale(${zoom})`}>
                                 {connections.map((conn, idx) => {
@@ -581,8 +638,17 @@
 
                         <div className="absolute inset-0" style={{ transform: `translate(${pan.x * zoom}px, ${pan.y * zoom}px) scale(${zoom})`, transformOrigin: '0 0' }}>
                             {nodes.map(node => (
-                                <div key={node.id} className={`absolute cursor-move transition-shadow ${selectedNode?.id === node.id ? 'ring-4 ring-yellow-400' : ''} ${node.isCenter ? 'ring-2 ring-white' : ''}`} style={{ left: node.x, top: node.y, backgroundColor: node.color, pointerEvents: 'auto' }} onMouseDown={(e) => { e.stopPropagation(); startDragging(e, node); setSelectedNode(node); }} onClick={(e) => { e.stopPropagation(); setSelectedNode(node); }}>
-                                    <div className="px-4 py-2 rounded-lg shadow-lg min-w-[150px] max-w-[250px]">
+                                <div
+                                    key={node.id}
+                                    className={`absolute cursor-move transition-shadow ${selectedNode?.id === node.id ? 'ring-4 ring-yellow-400' : ''} ${node.isCenter ? 'ring-2 ring-white' : ''}`}
+                                    style={{ left: node.x, top: node.y, backgroundColor: node.color, pointerEvents: 'auto' }}
+                                    onMouseDown={(e) => { e.stopPropagation(); startDragging(e, node); setSelectedNode(node); }}
+                                    onClick={(e) => { e.stopPropagation(); setSelectedNode(node); }}
+                                    onTouchStart={(e) => { e.stopPropagation(); e.preventDefault(); startTouchDragging(e, node); setSelectedNode(node); }}
+                                    onTouchMove={(e) => { e.stopPropagation(); e.preventDefault(); handleTouchMove(e); }}
+                                    onTouchEnd={(e) => { e.stopPropagation(); handleTouchEnd(); }}
+                                >
+                                    <div className="px-3 py-2 sm:px-4 rounded-lg shadow-lg min-w-[140px] max-w-[220px] sm:min-w-[150px] sm:max-w-[250px]">
                                         {editingNode === node.id ? (
                                             <div className="flex items-center gap-2">
                                                 <input type="text" value={editText} onChange={(e) => setEditText(e.target.value)} className="flex-1 px-2 py-1 bg-white/20 text-white rounded border-none outline-none" autoFocus onKeyPress={(e) => e.key === 'Enter' && saveEdit()} />
@@ -610,8 +676,8 @@
                         </div>
                     </div>
 
-                    <div className="bg-gray-800 border-t border-gray-700 p-3 text-sm text-gray-400">
-                        <p><strong className="text-white">Instructions:</strong> Click a node to select → Add Node → Drag to move → Edit to rename → Drag canvas to pan | <span className="text-green-400">☁️ Cloud sync enabled - access from any device!</span></p>
+                    <div className="bg-gray-800 border-t border-gray-700 px-4 py-3 text-xs sm:text-sm text-gray-400">
+                        <p className="leading-relaxed"><strong className="text-white">Instructions:</strong> Tap a node to select → Add Node → Drag or long-press to move → Edit to rename → Drag canvas to pan | <span className="text-green-400">☁️ Cloud sync enabled - access from any device!</span></p>
                     </div>
                 </div>
             );
