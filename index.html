@@ -109,12 +109,20 @@
                 mapsRef.once('value', (snapshot) => {
                     const data = snapshot.val();
                     if (data) {
-                        const mapsArray = Object.keys(data).map(key => ({
-                            ...data[key],
-                            id: key
-                        }));
+                        const mapsArray = Object.keys(data).map(key => {
+                            const mapData = data[key];
+                            // Validate and fix corrupted data
+                            return {
+                                ...mapData,
+                                id: key,
+                                nodes: mapData.nodes || [],
+                                connections: mapData.connections || []
+                            };
+                        }).filter(map => map.nodes.length > 0); // Remove empty maps
+                        
                         mapsArray.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
                         setMaps(mapsArray);
+                        
                         if (mapsArray.length > 0) {
                             loadMap(mapsArray[0]);
                         } else {
@@ -129,10 +137,16 @@
                 mapsRef.on('value', (snapshot) => {
                     const data = snapshot.val();
                     if (data) {
-                        const mapsArray = Object.keys(data).map(key => ({
-                            ...data[key],
-                            id: key
-                        }));
+                        const mapsArray = Object.keys(data).map(key => {
+                            const mapData = data[key];
+                            return {
+                                ...mapData,
+                                id: key,
+                                nodes: mapData.nodes || [],
+                                connections: mapData.connections || []
+                            };
+                        }).filter(map => map.nodes.length > 0);
+                        
                         mapsArray.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
                         setMaps(mapsArray);
                     }
@@ -203,9 +217,9 @@
 
             const loadMap = (map) => {
                 setCurrentMap(map);
-                setNodes(map.nodes);
-                setConnections(map.connections);
-                setMapName(map.name);
+                setNodes(map.nodes || []);
+                setConnections(map.connections || []);
+                setMapName(map.name || 'Untitled Map');
                 setShowMapList(false);
             };
 
@@ -419,6 +433,27 @@
                             <button onClick={initializeNewMap} className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600">
                                 New Map
                             </button>
+                            {user && (
+                                <button 
+                                    onClick={async () => {
+                                        if (confirm('Clear all cloud data and start fresh? This cannot be undone!')) {
+                                            try {
+                                                await database.ref(`users/${user.uid}/maps`).remove();
+                                                setMaps([]);
+                                                initializeNewMap();
+                                                alert('Cloud data cleared!');
+                                            } catch (error) {
+                                                console.error('Error clearing data:', error);
+                                                alert('Error clearing data');
+                                            }
+                                        }
+                                    }}
+                                    className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 text-sm"
+                                    title="Clear all cloud data"
+                                >
+                                    Reset Cloud
+                                </button>
+                            )}
                         </div>
                     </div>
 
