@@ -106,6 +106,26 @@
 
             const loadMapsFromFirebase = (userId) => {
                 const mapsRef = database.ref(`users/${userId}/maps`);
+                mapsRef.once('value', (snapshot) => {
+                    const data = snapshot.val();
+                    if (data) {
+                        const mapsArray = Object.keys(data).map(key => ({
+                            ...data[key],
+                            id: key
+                        }));
+                        mapsArray.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
+                        setMaps(mapsArray);
+                        if (mapsArray.length > 0) {
+                            loadMap(mapsArray[0]);
+                        } else {
+                            initializeNewMap();
+                        }
+                    } else {
+                        initializeNewMap();
+                    }
+                });
+                
+                // Listen for changes after initial load
                 mapsRef.on('value', (snapshot) => {
                     const data = snapshot.val();
                     if (data) {
@@ -115,11 +135,6 @@
                         }));
                         mapsArray.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
                         setMaps(mapsArray);
-                        if (mapsArray.length > 0 && !currentMap) {
-                            loadMap(mapsArray[0]);
-                        }
-                    } else {
-                        initializeNewMap();
                     }
                 });
             };
@@ -140,6 +155,11 @@
             };
 
             const saveMap = async () => {
+                if (nodes.length === 0) {
+                    alert('Cannot save empty map. Please add at least one node first.');
+                    return;
+                }
+
                 const mapData = {
                     name: mapName,
                     nodes,
