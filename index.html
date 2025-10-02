@@ -38,6 +38,7 @@
         const app = firebase.initializeApp(firebaseConfig);
         const database = firebase.database();
         const auth = firebase.auth();
+        const provider = new firebase.auth.GoogleAuthProvider();
 
         const Icon = ({ name, size = 20, className = "" }) => {
             const icons = {
@@ -76,22 +77,42 @@
             const [isPanning, setIsPanning] = useState(false);
             const [panStart, setPanStart] = useState({ x: 0, y: 0 });
             const [user, setUser] = useState(null);
+            const [userProfile, setUserProfile] = useState({ name: '', photo: '' });
             const [syncStatus, setSyncStatus] = useState('connecting');
             const canvasRef = useRef(null);
+            const mapsListenerRef = useRef(null);
 
             useEffect(() => {
-                // Sign in anonymously
-                auth.signInAnonymously()
-                    .then((userCredential) => {
-                        setUser(userCredential.user);
-                        setSyncStatus('connected');
-                        loadMapsFromFirebase(userCredential.user.uid);
-                    })
-                    .catch((error) => {
-                        console.error("Auth error:", error);
-                        setSyncStatus('error');
+                setSyncStatus('connecting');
+                const unsubscribe = auth.onAuthStateChanged((firebaseUser) => {
+                    if (firebaseUser) {
+                        setUser(firebaseUser);
+                        setUserProfile({
+                            name: firebaseUser.displayName || '',
+                            photo: firebaseUser.photoURL || ''
+                        });
+                        loadMapsFromFirebase(firebaseUser.uid);
+                    } else {
+                        setUser(null);
+                        setUserProfile({ name: '', photo: '' });
+                        if (mapsListenerRef.current) {
+                            mapsListenerRef.current.off();
+                            mapsListenerRef.current = null;
+                        }
+                        setMaps([]);
+                        setCurrentMap(null);
                         loadFromLocalStorage();
-                    });
+                        setSyncStatus('signedOut');
+                    }
+                });
+
+                return () => {
+                    unsubscribe();
+                    if (mapsListenerRef.current) {
+                        mapsListenerRef.current.off();
+                        mapsListenerRef.current = null;
+                    }
+                };
             }, []);
 
             const loadFromLocalStorage = () => {
@@ -105,50 +126,76 @@
             };
 
             const loadMapsFromFirebase = (userId) => {
+                if (!userId) return;
+
+                setSyncStatus('connecting');
+
+                if (mapsListenerRef.current) {
+                    mapsListenerRef.current.off();
+                }
+
                 const mapsRef = database.ref(`users/${userId}/maps`);
-                mapsRef.once('value', (snapshot) => {
-                    const data = snapshot.val();
-                    if (data) {
-                        const mapsArray = Object.keys(data).map(key => {
-                            const mapData = data[key];
-                            // Validate and fix corrupted data
-                            return {
-                                ...mapData,
-                                id: key,
-                                nodes: mapData.nodes || [],
-                                connections: mapData.connections || []
-                            };
-                        }).filter(map => map.nodes.length > 0); // Remove empty maps
-                        
-                        mapsArray.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
-                        setMaps(mapsArray);
-                        
-                        if (mapsArray.length > 0) {
-                            loadMap(mapsArray[0]);
+                mapsListenerRef.current = mapsRef;
+
+                mapsRef
+                    .once('value')
+                    .then((snapshot) => {
+                        const data = snapshot.val();
+                        if (data) {
+                            const mapsArray = Object.keys(data)
+                                .map(key => {
+                                    const mapData = data[key];
+                                    // Validate and fix corrupted data
+                                    return {
+                                        ...mapData,
+                                        id: key,
+                                        nodes: mapData.nodes || [],
+                                        connections: mapData.connections || []
+                                    };
+                                })
+                                .filter(map => map.nodes.length > 0); // Remove empty maps
+
+                            mapsArray.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
+                            setMaps(mapsArray);
+
+                            if (mapsArray.length > 0) {
+                                loadMap(mapsArray[0]);
+                            } else {
+                                initializeNewMap();
+                            }
                         } else {
+                            setMaps([]);
                             initializeNewMap();
                         }
-                    } else {
-                        initializeNewMap();
-                    }
-                });
-                
+                        setSyncStatus('connected');
+                    })
+                    .catch((error) => {
+                        console.error('Load error:', error);
+                        setSyncStatus('error');
+                        loadFromLocalStorage();
+                    });
+
                 // Listen for changes after initial load
                 mapsRef.on('value', (snapshot) => {
                     const data = snapshot.val();
                     if (data) {
-                        const mapsArray = Object.keys(data).map(key => {
-                            const mapData = data[key];
-                            return {
-                                ...mapData,
-                                id: key,
-                                nodes: mapData.nodes || [],
-                                connections: mapData.connections || []
-                            };
-                        }).filter(map => map.nodes.length > 0);
-                        
+                        const mapsArray = Object.keys(data)
+                            .map(key => {
+                                const mapData = data[key];
+                                return {
+                                    ...mapData,
+                                    id: key,
+                                    nodes: mapData.nodes || [],
+                                    connections: mapData.connections || []
+                                };
+                            })
+                            .filter(map => map.nodes.length > 0);
+
                         mapsArray.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
                         setMaps(mapsArray);
+                    } else {
+                        setMaps([]);
+                        initializeNewMap();
                     }
                 });
             };
@@ -181,9 +228,8 @@
                     lastModified: new Date().toISOString()
                 };
 
-                setSyncStatus('saving');
-
                 if (user) {
+                    setSyncStatus('saving');
                     try {
                         const mapId = currentMap?.id || `map_${Date.now()}`;
                         await database.ref(`users/${user.uid}/maps/${mapId}`).set(mapData);
@@ -197,6 +243,7 @@
                     }
                 } else {
                     saveToLocalStorage(mapData);
+                    setSyncStatus('signedOut');
                 }
             };
 
@@ -235,13 +282,41 @@
                     }
                 }
 
+                const remainingMaps = maps.filter(m => m.id !== mapId);
+                setMaps(remainingMaps);
+                localStorage.setItem('mindMaps', JSON.stringify(remainingMaps));
+
                 if (currentMap?.id === mapId) {
-                    const remainingMaps = maps.filter(m => m.id !== mapId);
                     if (remainingMaps.length > 0) {
                         loadMap(remainingMaps[0]);
                     } else {
                         initializeNewMap();
                     }
+                }
+            };
+
+            const handleSignIn = async () => {
+                setSyncStatus('connecting');
+                try {
+                    await auth.signInWithPopup(provider);
+                } catch (error) {
+                    console.error('Sign-in error:', error);
+                    setSyncStatus('error');
+                    loadFromLocalStorage();
+                }
+            };
+
+            const handleSignOut = async () => {
+                setSyncStatus('connecting');
+                try {
+                    if (mapsListenerRef.current) {
+                        mapsListenerRef.current.off();
+                        mapsListenerRef.current = null;
+                    }
+                    await auth.signOut();
+                } catch (error) {
+                    console.error('Sign-out error:', error);
+                    setSyncStatus('error');
                 }
             };
 
@@ -361,6 +436,7 @@
                     connected: { icon: 'cloud', color: 'text-green-400', text: 'Cloud Connected', animate: false },
                     saving: { icon: 'cloud', color: 'text-blue-400', text: 'Saving...', animate: true },
                     synced: { icon: 'cloud', color: 'text-green-400', text: 'Synced ✓', animate: false },
+                    signedOut: { icon: 'cloudOff', color: 'text-gray-400', text: 'Sign in to sync', animate: false },
                     error: { icon: 'cloudOff', color: 'text-red-400', text: 'Offline Mode', animate: false }
                 };
                 const status = indicators[syncStatus] || indicators.connected;
@@ -434,7 +510,7 @@
                                 New Map
                             </button>
                             {user && (
-                                <button 
+                                <button
                                     onClick={async () => {
                                         if (confirm('Clear all cloud data and start fresh? This cannot be undone!')) {
                                             try {
@@ -453,6 +529,30 @@
                                 >
                                     Reset Cloud
                                 </button>
+                            )}
+                            {!user && (
+                                <button
+                                    onClick={handleSignIn}
+                                    className="px-4 py-2 bg-yellow-400 text-gray-900 font-semibold rounded hover:bg-yellow-300"
+                                >
+                                    Sign in with Google
+                                </button>
+                            )}
+                            {user && (
+                                <div className="flex items-center gap-3 pl-2 border-l border-gray-700">
+                                    {userProfile.photo && (
+                                        <img src={userProfile.photo} alt="Profile" className="w-8 h-8 rounded-full border border-gray-600" />
+                                    )}
+                                    <span className="text-sm text-white max-w-[150px] truncate">
+                                        {userProfile.name || user.email || 'Signed In'}
+                                    </span>
+                                    <button
+                                        onClick={handleSignOut}
+                                        className="px-3 py-2 bg-gray-700 text-white rounded hover:bg-gray-600"
+                                    >
+                                        Sign Out
+                                    </button>
+                                </div>
                             )}
                         </div>
                     </div>
